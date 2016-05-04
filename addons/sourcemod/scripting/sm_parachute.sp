@@ -119,8 +119,9 @@
 
 #include <sourcemod>
 #include <sdktools>
+#include <sdkhooks>
 
-#define PARACHUTE_VERSION 	"2.5"
+#define PARACHUTE_VERSION 	"2.6"
 
 //Parachute Model
 #define PARACHUTE_MODEL		"parachute_carbon"
@@ -150,6 +151,7 @@ new Handle:g_version = INVALID_HANDLE;
 new Handle:g_model = INVALID_HANDLE;
 new Handle:g_decrease = INVALID_HANDLE;
 new Handle:g_button = INVALID_HANDLE;
+new Handle:g_hLookupAttachment = INVALID_HANDLE;
 
 new x;
 new cl_flags;
@@ -168,7 +170,7 @@ new Parachute_Ent[MAXPLAYERS+1];
 public Plugin:myinfo =
 {
 	name = "SM Parachute",
-	author = "SWAT_88",
+	author = "SWAT_88, n00b",
 	description = "To use your parachute press and hold your E(+use) button while falling.",
 	version = PARACHUTE_VERSION,
 	url = "http://www.sourcemod.net/"
@@ -207,6 +209,14 @@ public OnPluginStart()
 	HookConVarChange(g_cost, CvarChange_Cost);
 	HookConVarChange(g_model, CvarChange_Model);
 	HookConVarChange(g_button, CvarChange_Button);
+
+
+	StartPrepSDKCall(SDKCall_Entity);
+	PrepSDKCall_SetFromConf(hGameConf, SDKConf_Signature, "LookupAttachment");
+	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
+	PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);
+	g_hLookupAttachment = EndPrepSDKCall();
+
 }
 
 public OnPluginEnd(){
@@ -308,6 +318,14 @@ public OnClientDisconnect(client){
 	CloseParachute(client);
 }
 
+stock LookupAttachment(client, String:point[])
+{
+    if(g_hLookupAttachment==INVALID_HANDLE) return 0;
+    if( client<=0 || !IsClientInGame(client) ) return 0;
+    return SDKCall(g_hLookupAttachment, client, point);
+}
+
+
 public Action:PlayerSpawn(Handle:event, const String:name[], bool:dontBroadcast){
 	new client;
 	client = GetClientOfUserId(GetEventInt(event, "userid"));
@@ -374,19 +392,57 @@ public OpenParachute(client){
 	decl String:path[256];
 	strcopy(path,255,path_model);
 	StrCat(path,255,".mdl")
-	
-	if(GetConVarInt(g_model) == 1){
-		Parachute_Ent[client] = CreateEntityByName("prop_dynamic_override");
-		DispatchKeyValue(Parachute_Ent[client],"model",path);
-		SetEntityMoveType(Parachute_Ent[client], MOVETYPE_NOCLIP);
-		DispatchSpawn(Parachute_Ent[client]);
+
+	if(GetConVarInt(g_model) == 1){ // code taken from sm_hats 
+		if(!LookupAttachment(client, "forward")) return;
+		new Float:or[3];
+		new Float:ang[3];
+		//new Float:fForward[3];
+		//new Float:fRight[3];
+		//new Float:fUp[3];
+		GetClientAbsOrigin(client,or);
+		GetClientAbsAngles(client,ang);
+
+/*
+		ang[0] += g_eHats[g_iHatCache[client][slot]][Angles][0];
+		ang[1] += g_eHats[g_iHatCache[client][slot]][Angles][1];
+		ang[2] += g_eHats[g_iHatCache[client][slot]][Angles][2];
+
+		new Float:fOffset[3];
+		fOffset[0] = g_eHats[g_iHatCache[client][slot]][Position][0];
+		fOffset[1] = g_eHats[g_iHatCache[client][slot]][Position][1];
+		fOffset[2] = g_eHats[g_iHatCache[client][slot]][Position][2];
+
+		GetAngleVectors(ang, fForward, fRight, fUp);
+
+		or[0] += fRight[0]*fOffset[0]+fForward[0]*fOffset[1]+fUp[0]*fOffset[2];
+		or[1] += fRight[1]*fOffset[0]+fForward[1]*fOffset[1]+fUp[1]*fOffset[2];
+		or[2] += fRight[2]*fOffset[0]+fForward[2]*fOffset[1]+fUp[2]*fOffset[2];*/
+
+
+
+		new ent =CreateEntityByName("prop_dynamic_override");
+		Parachute_Ent[client] = ent;
+		DispatchKeyValue(ent, "model",path);
+		DispatchKeyValue(ent. "spawnflags", "4");
+		SetEntProp(ent, Prop_Data, "m_CollisionGroup", 0);
+		SetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity", client);
+		SetEntityMoveType(ent, MOVETYPE_NOCLIP);
+		DispatchSpawn(ent);
 		
 		hasModel[client]=true;
-		TeleportParachute(client);
+		//TeleportParachute(client);
+		TeleportEntity(ent, or, ang, NULL_VECTOR); 
+
+		SetVariantString("!activator");
+		AcceptEntityInput(ent, "SetParent", client, ent, 0);
+		
+		SetVariantString("forward");
+		AcceptEntityInput(ent, "SetParentAttachmentMaintainOffset", ent, ent, 0);
 	}
 }
 
-public TeleportParachute(client){
+public TeleportParachute(client){/*
 	if(hasModel[client] && IsValidEntity(Parachute_Ent[client])){
 		decl Float:Client_Origin[3];
 		decl Float:Client_Angles[3];
@@ -395,12 +451,13 @@ public TeleportParachute(client){
 		GetClientAbsAngles(client,Client_Angles);
 		Parachute_Angles[1] = Client_Angles[1];
 		TeleportEntity(Parachute_Ent[client], Client_Origin, Parachute_Angles, NULL_VECTOR);
-	}
+	}*/
 }
 
 public CloseParachute(client){
 	if(hasModel[client] && IsValidEntity(Parachute_Ent[client])){
-		RemoveEdict(Parachute_Ent[client]);
+		AcceptEntityInput(Parachute_Ent[client], "Kill");
+		//RemoveEdict(Parachute_Ent[client]);
 		hasModel[client]=false;
 	}
 }
@@ -554,7 +611,7 @@ public SellParachute(client){
 
 public Action:HandleSay(client, args){
 	new String:line[30];
-	if(GetConVarInt(g_enabled) == 0) return Plugin_Continue;
+	if(GetConVarInt(g_enabled) == 0 || GetConVarInt(g_cost)==0) return Plugin_Continue;
 	if (args > 0){
 		GetCmdArg(1,line,sizeof(line));
 		if (strcmp(g_game,"cstrike",false)==0){

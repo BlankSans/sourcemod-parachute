@@ -152,6 +152,7 @@ new Handle:g_model = INVALID_HANDLE;
 new Handle:g_decrease = INVALID_HANDLE;
 new Handle:g_button = INVALID_HANDLE;
 new Handle:g_hLookupAttachment = INVALID_HANDLE;
+static Handle:hSetAnimation;
 
 new x;
 new cl_flags;
@@ -212,10 +213,18 @@ public OnPluginStart()
 
 
 	StartPrepSDKCall(SDKCall_Entity);
+
+	new Handle:hGameConf = LoadGameConfigFile("parachute.gamedata");
 	PrepSDKCall_SetFromConf(hGameConf, SDKConf_Signature, "LookupAttachment");
 	PrepSDKCall_SetReturnInfo(SDKType_PlainOldData, SDKPass_Plain);
 	PrepSDKCall_AddParameter(SDKType_String, SDKPass_Pointer);
 	g_hLookupAttachment = EndPrepSDKCall();
+
+/*
+        StartPrepSDKCall(SDKCall_Player);
+        PrepSDKCall_SetFromConf(hGameConfig, SDKConf_Virtual, "SetAnimation");
+        PrepSDKCall_AddParameter(SDKType_PlainOldData, SDKPass_Plain);
+        hSetAnimation = EndPrepSDKCall();*/
 
 }
 
@@ -320,7 +329,7 @@ public OnClientDisconnect(client){
 
 stock LookupAttachment(client, String:point[])
 {
-    if(g_hLookupAttachment==INVALID_HANDLE) return 0;
+    if(g_hLookupAttachment==INVALID_HANDLE){ PrintToChat(client,"[ERROR] INVALID_HANDLE"); return 0; }
     if( client<=0 || !IsClientInGame(client) ) return 0;
     return SDKCall(g_hLookupAttachment, client, point);
 }
@@ -373,7 +382,7 @@ public StartPara(client,bool:open)
 			}
 			TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, velocity);
 			SetEntDataVector(client, g_iVelocity, velocity);
-			SetEntityGravity(client,0.1);
+			SetEntityGravity(client,0.01);
 			if(open) OpenParachute(client);
 		}
 	}
@@ -389,12 +398,13 @@ public EndPara(client)
 }
 
 public OpenParachute(client){
+	if(hasModel[client]) return;
 	decl String:path[256];
 	strcopy(path,255,path_model);
 	StrCat(path,255,".mdl")
 
 	if(GetConVarInt(g_model) == 1){ // code taken from sm_hats 
-		if(!LookupAttachment(client, "forward")) return;
+		if(!LookupAttachment(client, "primary")){ PrintToChat(client,"[ERROR] Attachment"); return; } // TODO : LookupBone offset of ValveBiped.Bip01_Head1 or other magic...
 		new Float:or[3];
 		new Float:ang[3];
 		//new Float:fForward[3];
@@ -423,24 +433,62 @@ public OpenParachute(client){
 
 		new ent =CreateEntityByName("prop_dynamic_override");
 		Parachute_Ent[client] = ent;
-		DispatchKeyValue(ent, "model",path);
-		DispatchKeyValue(ent. "spawnflags", "4");
+		DispatchKeyValue(ent, "model", path);
+    	DispatchKeyValue(ent, "spawnflags", "4");
 		SetEntProp(ent, Prop_Data, "m_CollisionGroup", 0);
 		SetEntPropEnt(ent, Prop_Send, "m_hOwnerEntity", client);
+
+	    AcceptEntityInput(ent, "TurnOn", ent, ent, 0);
+	    AcceptEntityInput(ent, "EnableCollision");
+
+
 		SetEntityMoveType(ent, MOVETYPE_NOCLIP);
 		DispatchSpawn(ent);
+		ActivateEntity(ent);
 		
 		hasModel[client]=true;
 		//TeleportParachute(client);
+		// animations just wont work... model is fucked up !
+/*
+        SDKHook(ent, SDKHook_Spawn, SpawnChute);
+        SetVariantString("deploy");
+        AcceptEntityInput(ent, "SetAnimation", -1, -1, 0); 
+        SetVariantString("idle");
+        AcceptEntityInput(ent, "SetDefaultAnimation", -1, -1, 0); 
+        SetVariantFloat(1.0);
+        AcceptEntityInput(ent, "SetPlaybackRate", -1, -1, 0); 
+*/
+
 		TeleportEntity(ent, or, ang, NULL_VECTOR); 
 
 		SetVariantString("!activator");
 		AcceptEntityInput(ent, "SetParent", client, ent, 0);
 		
-		SetVariantString("forward");
+		SetVariantString("primary");
+		AcceptEntityInput(ent, "SetParentAttachment", ent, ent, 0);
+
+		
+		DispatchKeyValueVector(ent, "angles", ang);
+		DispatchKeyValueVector(ent, "origin", or);
+
+		SetVariantString("primary");
 		AcceptEntityInput(ent, "SetParentAttachmentMaintainOffset", ent, ent, 0);
 	}
 }
+
+
+public Action:SpawnChute(entity, classname)
+{
+
+    SetVariantString("kurwa");
+    AcceptEntityInput(entity, "SetAnimation", -1, -1, 0); 
+    SetVariantString("idle");
+    AcceptEntityInput(entity, "SetDefaultAnimation", -1, -1, 0); 
+    SetVariantFloat(1.0);
+    AcceptEntityInput(entity, "SetPlaybackRate", -1, -1, 0); 
+  return Plugin_Continue;
+}  
+
 
 public TeleportParachute(client){/*
 	if(hasModel[client] && IsValidEntity(Parachute_Ent[client])){
@@ -537,7 +585,7 @@ stock SendHintText(client, String:text[], any:...){
 public PrintMsg(client,String:msg[]){
 	new String:translation[256];
 	if(GetConVarInt(g_enabled) == 0) return;
-	Format(translation, 255, "%T", msg, LANG_SERVER, ButtonText);
+	Format(translation, 255, "%T", msg, client, ButtonText);
 	if(GetConVarInt(g_msgtype) == 1){		
 		PrintToChat(client,"\x01\x04[SM Parachute]\x01 %s", translation);
 	}
@@ -634,13 +682,13 @@ public Action:WelcomeMsg (Handle:timer, any:client)
 
 	if (GetConVarInt (g_welcome) == 1 && IsClientConnected (client) && IsClientInGame (client))
 	{
-		PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Welcome", LANG_SERVER);
+		PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Welcome", client);
 		if (GetConVarInt(g_cost)==0){
-			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", LANG_SERVER);
+			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", client);
 		}
 		else{
-			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Buy Help", LANG_SERVER);
-			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Sell Help", LANG_SERVER);
+			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Buy Help", client);
+			PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Sell Help", client);
 		}
 	}
 	return Plugin_Continue;
@@ -656,20 +704,20 @@ public CvarChange_Enabled(Handle:cvar, const String:oldvalue[], const String:new
 					SetEntityMoveType(client,MOVETYPE_WALK);
 					SellParachuteOff(client,GetConVarInt(g_cost));
 				}
-				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Disabled", LANG_SERVER);
+				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Disabled", client);
 			}
 		}
 	}
 	else{
 		for (new client = 1; client <= g_maxplayers; client++){
 			if (IsClientInGame(client) && IsPlayerAlive(client)){
-				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Enabled", LANG_SERVER);
+				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Enabled", client);
 				if (GetConVarInt(g_cost)==0){
-					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", LANG_SERVER);
+					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", client);
 				}
 				else{
-					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Buy Help", LANG_SERVER);
-					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Sell Help", LANG_SERVER);
+					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Buy Help", client);
+					PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Sell Help", client);
 				}
 			}
 		}
@@ -691,7 +739,7 @@ public CvarChange_Cost(Handle:cvar, const String:oldvalue[], const String:newval
 		for (new client = 1; client <= g_maxplayers; client++){
 			if (IsClientInGame(client) && IsPlayerAlive(client)){
 				if (hasPara[client]) SellParachuteOff(client,StringToInt(oldvalue));
-				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", LANG_SERVER);
+				PrintToChat(client,"\x01\x04[SM Parachute]\x01 %T", "Parachute For Everyone", client);
 			}
 		}
 	}
